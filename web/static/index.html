@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ForgeCal — 2D 弾塑性鍛造ソルバ</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, "Segoe UI", sans-serif; max-width: 900px;
+         margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; }
+  .row { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap;
+         margin: .7rem 0; }
+  select, button, input { font-size: 1rem; padding: .35rem .5rem; }
+  input[type=number] { width: 6rem; }
+  button { cursor: pointer; }
+  button.primary { background: #2563eb; color: #fff; border: 0;
+                   padding: .5rem 1.1rem; border-radius: 6px; font-size: 1.05rem; }
+  button.del { padding: .1rem .5rem; }
+  #bar { height: 12px; background: #3b82f6; width: 0; border-radius: 6px;
+         transition: width .3s; }
+  #barwrap { background: #8883; border-radius: 6px; overflow: hidden;
+             flex: 1; min-width: 200px; }
+  .muted { color: #888; font-size: .9rem; }
+  .ng { color: #c0392b; font-weight: 600; }
+  .ok { color: #2e7d32; font-weight: 600; }
+  ul { margin: .3rem 0; }
+  img { max-width: 100%; border: 1px solid #8884; border-radius: 6px;
+        margin-top: .5rem; }
+  table { border-collapse: collapse; margin: .4rem 0; width: 100%; }
+  th, td { border: 1px solid #8884; padding: .25rem .5rem; text-align: left; }
+  fieldset { border: 1px solid #8884; border-radius: 6px; margin: .6rem 0; }
+  code { background: #8882; padding: 0 .3rem; border-radius: 3px; }
+  .swatch { display: inline-block; width: .8em; height: .8em; border-radius: 2px;
+            vertical-align: middle; margin-right: .2em; }
+  .info { display: inline-block; width: 1.05em; height: 1.05em; line-height: 1.02em;
+          text-align: center; border: 1px solid #999; border-radius: 50%;
+          color: #888; font-size: .82em; cursor: help; margin-left: .35em; }
+  .qsq { display: inline-block; width: 14px; height: 14px; border-radius: 3px;
+         margin-right: 3px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<h1>ForgeCal — 2D 弾塑性鍛造ソルバ</h1>
+<p class="muted">DXFをアップロードしてサーバ上で解析します（同時1ジョブ）。結果はメッシュ変形動画＋荷重曲線。応力分布はH5をダウンロードしてポスト処理で。
+<br>応力・ひずみの可視化には <a href="https://github.com/matsumoto-works/forgecal/releases/latest" target="_blank" rel="noopener">ポスト処理アプリ（デスクトップ版・無料）</a> をご利用ください（Windows用・Python不要）。</p>
+
+<fieldset>
+  <legend>① DXFを読み込む（1ファイルずつ読み込み）<span class="info" title="素材（ワーク）と工具のDXFを1つずつ選択（同じ操作で次々追加できます）。ファイル名は自由（punch / Punch / TopDie 等）。読み込んだら下表で役割を指定してください。">ⓘ</span></legend>
+  <label for="dxf" style="display:inline-block;border:1px solid #8886;border-radius:6px;padding:.35rem .9rem;cursor:pointer">ファイルを選択</label>
+  <input type="file" id="dxf" accept=".dxf" onchange="onPick(this)" style="display:none">
+  <span id="filecap" class="muted">ファイルを選択してください</span>
+  <div id="models"></div>
+</fieldset>
+
+<fieldset id="previewbox" hidden>
+  <legend>② 配置プレビュー（解析前の確認）<span class="info" title="青点線＝パンチのストローク終了位置／緑矢印＝板押さえの向き。工具がワークに当たるか・ストロークが妥当かを確認できます。">ⓘ</span></legend>
+  <div id="preview"></div>
+  <p class="muted">
+    <span class="swatch" style="background:#9ecae1"></span>素材（内部の網目＝フローネット格子）
+    <span class="swatch" style="background:#2563eb"></span>パンチ
+    <span class="swatch" style="background:#2e7d32"></span>板押さえ
+    <span class="swatch" style="background:#888"></span>ダイ</p>
+</fieldset>
+
+<fieldset>
+  <legend>③ 解析条件</legend>
+  <div class="row">
+    <label>対称モード
+      <select id="mode" onchange="drawPreview()">
+        <option value="axisymmetric">軸対称</option>
+        <option value="plane_strain">平面ひずみ</option>
+      </select></label>
+    <label>ストローク <input type="number" id="stroke" value="6" step="0.5" min="0.1" oninput="drawPreview(); updateStepDefault()"> mm</label>
+    <label>メッシュ寸法 <input type="number" id="mesh" value="0.8" step="0.1" min="0.1" oninput="meshTouched=true; updateStepDefault()"> mm</label>
+    <label>解析ステップ <input type="number" id="dstroke" value="0.05" step="0.01" min="0.001" oninput="dstrokeTouched=true"> mm</label>
+  </div>
+  <div id="meshhint" class="muted" style="margin-top:-.2rem"></div>
+  <div class="row">
+    <label>フローネット密度 <input type="number" id="fdiv" value="20" step="2" min="4" max="60" oninput="drawPreview()"> 分割</label>
+    <span class="info" title="変形後の流線（材料の流れ）を描く格子。素材全体を縦横この数で分割（20＝21×21本）。常時計算します。">ⓘ</span>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>④ 材料（既定値は S45C・焼ならし）<span class="info" title="流動応力 σ = K·(ε₀+εₚ)ⁿ（べき乗則）。鍛造を想定し、塑性ひずみ ε_sat 以上は飽和（ほぼ横ばい・極わずかに微増）。">ⓘ</span></legend>
+  <div class="row">
+    <label>ヤング率 E <input type="number" id="E" value="205000" step="1000" min="1000"> MPa</label>
+    <label>ポアソン比 ν <input type="number" id="nu" value="0.29" step="0.01" min="0" max="0.49"></label>
+    <label>加工硬化指数 n <input type="number" id="n" value="0.16" step="0.01" min="0" max="1" oninput="drawFlowCurve()"></label>
+    <label>強度定数 K <input type="number" id="C" value="890" step="10" min="1" oninput="drawFlowCurve()"> MPa</label>
+    <label>飽和ひずみ ε_sat <input type="number" id="esat" value="1.0" step="0.1" min="0.1" max="5" oninput="drawFlowCurve()"></label>
+  </div>
+  <div id="flowchart" style="margin-top:.4rem"></div>
+</fieldset>
+
+<div class="row"><button class="primary" id="runc">解析ジョブを投入</button>
+  <span id="qinfo" class="muted"></span>
+  <span id="cmsg" class="ng"></span></div>
+
+<!-- ───────── progress + result ───────── -->
+<div class="row" id="progwrap" hidden>
+  <div id="barwrap"><div id="bar"></div></div>
+  <span id="prog" class="muted"></span>
+  <button id="stopbtn" hidden onclick="stopJob()">解析を停止</button>
+</div>
+<div id="result"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let timer = null;
+let loaded = [];                 // accumulated File objects
+const meta = {};                 // name -> {role, m, f, dir}
+let previewData = null;          // cached {stem: [{points,closed}]}
+let meshTouched = false;         // user manually edited the mesh field
+let dstrokeTouched = false;      // user manually edited the step field
+let currentJob = null;           // running job id (for stop + reconnect)
+const ROLE_COLOR = { blank:'#9ecae1', punch:'#2563eb', die:'#888', holder:'#2e7d32' };
+
+const stemOf = f => f.name.replace(/\.dxf$/i, '');
+function guessRole(stem) {
+  const s = stem.toLowerCase();
+  if (s.includes('blank') || s.includes('work') || s.includes('billet') || s.includes('zairyo')) return 'blank';
+  if (s.includes('punch') || s.includes('top')) return 'punch';
+  if (s.includes('strip') || s.includes('holder') || s.includes('osae') || s.includes('press')) return 'holder';
+  return 'die';
+}
+function onPick(input) {
+  for (const f of input.files) {
+    const i = loaded.findIndex(x => x.name === f.name);
+    if (i >= 0) loaded[i] = f; else loaded.push(f);
+    if (!meta[f.name]) meta[f.name] = { role: guessRole(stemOf(f)), m: 0.12, f: 100, dir: 'down' };
+  }
+  input.value = '';              // ready for the next single file
+  renderModels();
+  fetchPreview();
+}
+function removeFile(name) {
+  loaded = loaded.filter(f => f.name !== name);
+  delete meta[name];
+  renderModels();
+  drawPreview();
+}
+function renderModels() {
+  if (!loaded.length) { $('#models').innerHTML = '<p class="muted">未読み込み</p>'; return; }
+  let h = '<table><tr><th>ファイル</th><th>役割</th><th>摩擦 m</th><th>押さえ力 kN</th><th>方向</th><th></th></tr>';
+  for (const f of loaded) {
+    const n = f.name, mt = meta[n], hold = mt.role === 'holder';
+    h += `<tr>
+      <td>${n}</td>
+      <td><select onchange="meta['${n}'].role=this.value; renderModels(); drawPreview()">
+        ${['blank:素材(ワーク)','punch:パンチ(移動)','die:ダイ(固定)','holder:板押さえ(力制御)']
+          .map(o => { const [v, t] = o.split(':');
+            return `<option value="${v}" ${mt.role===v?'selected':''}>${t}</option>`; }).join('')}
+      </select></td>
+      <td>${mt.role==='blank' ? '—' :
+           `<input type="number" value="${mt.m}" step="0.01" min="0" onchange="meta['${n}'].m=this.value">`}</td>
+      <td>${hold ? `<input type="number" value="${mt.f}" step="10" min="0" onchange="meta['${n}'].f=this.value">` : '—'}</td>
+      <td>${hold ? `<select onchange="meta['${n}'].dir=this.value; drawPreview()">
+            <option value="down" ${mt.dir==='down'?'selected':''}>下向き</option>
+            <option value="up" ${mt.dir==='up'?'selected':''}>上向き</option></select>` : '—'}</td>
+      <td><button class="del" onclick="removeFile('${n}')">削除</button></td>
+    </tr>`;
+  }
+  $('#models').innerHTML = h + '</table>';
+}
+
+async function fetchPreview() {
+  if (!loaded.length) { previewData = null; $('#previewbox').hidden = true; return; }
+  const fd = new FormData();
+  for (const f of loaded) fd.append('files', f, f.name);
+  try {
+    const r = await fetch('api/preview', { method: 'POST', body: fd });
+    if (!r.ok) { previewData = null; $('#previewbox').hidden = true; return; }
+    previewData = (await r.json()).outlines;
+    drawPreview();
+  } catch (e) { previewData = null; $('#previewbox').hidden = true; }
+}
+function drawPreview() {
+  recommendMesh();
+  if (!previewData || !loaded.length) { $('#previewbox').hidden = true; return; }
+  const stroke = parseFloat($('#stroke').value) || 0;
+  const items = [], pts = [];
+  for (const f of loaded) {
+    const cs = previewData[stemOf(f)]; if (!cs) continue;
+    const m = meta[f.name];
+    items.push({ role: m.role, dir: m.dir, contours: cs });
+    for (const c of cs) for (const p of c.points) {
+      pts.push(p);
+      if (m.role === 'punch') pts.push([p[0], p[1] - stroke]);
+    }
+  }
+  if (!pts.length) { $('#previewbox').hidden = true; return; }
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minx = Math.min(...xs), maxx = Math.max(...xs);
+  const miny = Math.min(...ys), maxy = Math.max(...ys);
+  const w = (maxx - minx) || 1, h = (maxy - miny) || 1, pad = 0.1 * Math.max(w, h);
+  const W = 380, scale = W / (w + 2 * pad), H = (h + 2 * pad) * scale;
+  const X = x => (x - minx + pad) * scale;
+  const Y = y => (maxy - y + pad) * scale;     // flip y (engineering up -> svg down)
+  const path = (c, dy) => 'M' + c.points.map(p =>
+      `${X(p[0]).toFixed(1)},${Y(p[1] + (dy || 0)).toFixed(1)}`).join(' L') + (c.closed ? ' Z' : '');
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px">`;
+  for (const it of items) {
+    const col = ROLE_COLOR[it.role] || '#888';
+    for (const c of it.contours)
+      svg += `<path d="${path(c, 0)}" fill="${it.role==='blank'?col:'none'}" fill-opacity="0.3" stroke="${col}" stroke-width="1.4"/>`;
+  }
+  for (const it of items) if (it.role === 'punch')      // ghost at end-of-stroke
+    for (const c of it.contours)
+      svg += `<path d="${path(c, -stroke)}" fill="none" stroke="${ROLE_COLOR.punch}" stroke-width="1.2" stroke-dasharray="5,4"/>`;
+  for (const it of items) if (it.role === 'holder') {   // hold-down direction arrow
+    let cx = 0, cy = 0, np = 0, hlo = 1e30, hhi = -1e30;
+    for (const c of it.contours) for (const p of c.points) {
+      cx += p[0]; cy += p[1]; np++; hlo = Math.min(hlo, p[1]); hhi = Math.max(hhi, p[1]); }
+    cx /= np; cy /= np;
+    const L = 0.8 * (hhi - hlo), s = it.dir === 'up' ? +1 : -1;   // 80% of holder height
+    const x0 = X(cx), y0 = Y(cy - s * L / 2), y1 = Y(cy + s * L / 2);
+    const ah = 9 * (y1 > y0 ? 1 : -1);
+    svg += `<line x1="${x0}" y1="${y0}" x2="${x0}" y2="${y1}" stroke="#2e7d32" stroke-width="4"/>
+      <path d="M${x0-7},${y1-ah} L${x0+7},${y1-ah} L${x0},${y1+ah*0.5} Z" fill="#2e7d32"/>`;
+  }
+  const bl = items.find(it => it.role === 'blank');   // material dims + flow net
+  if (bl) {
+    let bx0 = 1e30, bx1 = -1e30, by0 = 1e30, by1 = -1e30;
+    for (const c of bl.contours) for (const p of c.points) {
+      bx0 = Math.min(bx0, p[0]); bx1 = Math.max(bx1, p[0]);
+      by0 = Math.min(by0, p[1]); by1 = Math.max(by1, p[1]); }
+    const bw = bx1 - bx0, bh = by1 - by0;
+    const nd = Math.max(parseInt($('#fdiv').value) || 20, 1);   // flow-net seed grid (always)
+    for (let i = 0; i <= nd; i++) {
+      const gx = bx0 + bw * i / nd, gy = by0 + bh * i / nd;
+      svg += `<line x1="${X(gx).toFixed(1)}" y1="${Y(by0).toFixed(1)}" x2="${X(gx).toFixed(1)}" y2="${Y(by1).toFixed(1)}" stroke="#9ecae1" stroke-width="0.4"/>`;
+      svg += `<line x1="${X(bx0).toFixed(1)}" y1="${Y(gy).toFixed(1)}" x2="${X(bx1).toFixed(1)}" y2="${Y(gy).toFixed(1)}" stroke="#9ecae1" stroke-width="0.4"/>`;
+    }
+    svg += `<text x="${((X(bx0)+X(bx1))/2).toFixed(1)}" y="${(Y(by0)+18).toFixed(1)}" font-size="13" text-anchor="middle" fill="#444">幅 ${bw.toFixed(1)}</text>`;
+    svg += `<text x="${(X(bx1)+6).toFixed(1)}" y="${((Y(by0)+Y(by1))/2).toFixed(1)}" font-size="13" fill="#444">高さ ${bh.toFixed(1)}</text>`;
+  }
+  svg += '</svg>';
+  $('#preview').innerHTML = svg;
+  $('#previewbox').hidden = false;
+}
+
+async function runCustom() {
+  $('#cmsg').textContent = '';
+  const blanks = loaded.filter(f => meta[f.name].role === 'blank');
+  const punches = loaded.filter(f => meta[f.name].role === 'punch');
+  if (blanks.length !== 1) return $('#cmsg').textContent = '素材(ワーク)を1つ指定してください';
+  if (punches.length !== 1) return $('#cmsg').textContent = 'パンチを指定してください';
+
+  const tools = loaded.filter(f => meta[f.name].role !== 'blank').map(f => {
+    const mt = meta[f.name], spec = { file: stemOf(f), m: parseFloat(mt.m) };
+    if (mt.role === 'holder') {
+      spec.control = 'force'; spec.f_const = parseFloat(mt.f) * 1000;
+      spec.free_dir = [0, mt.dir === 'up' ? 1 : -1];
+    }
+    return spec;
+  });
+  const cfg = {
+    mode: $('#mode').value,
+    mat: { E: parseFloat($('#E').value), nu: parseFloat($('#nu').value),
+           C: parseFloat($('#C').value), n: parseFloat($('#n').value),
+           e_sat: parseFloat($('#esat').value) },
+    stroke: parseFloat($('#stroke').value), mesh: parseFloat($('#mesh').value),
+    dstroke: parseFloat($('#dstroke').value),
+    flownet: true, flownet_div: parseInt($('#fdiv').value),
+    blank: stemOf(blanks[0]), punch: stemOf(punches[0]), tools
+  };
+  const fd = new FormData();
+  fd.append('config', JSON.stringify(cfg));
+  for (const f of loaded) fd.append('files', f, f.name);
+
+  startProgress();
+  const r = await fetch('api/jobs/custom', { method: 'POST', body: fd });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.status }));
+    $('#progwrap').hidden = true;
+    return $('#cmsg').textContent = 'エラー: ' + (e.detail || r.status);
+  }
+  poll((await r.json()).job_id);
+}
+
+// ----- progress / poll / render -----
+function startProgress() {
+  $('#runc').disabled = true;
+  $('#result').innerHTML = '';
+  $('#progwrap').hidden = false;
+  $('#bar').style.width = '0';
+  $('#prog').textContent = '投入中…';
+}
+function poll(id) {
+  currentJob = id;
+  localStorage.setItem('forgeJob', id);
+  $('#progwrap').hidden = false;
+  $('#stopbtn').hidden = false;
+  $('#runc').disabled = true;
+  clearInterval(timer);
+  timer = setInterval(async () => {
+    let s;
+    try { const r = await fetch('api/jobs/' + id); if (!r.ok) throw 0; s = await r.json(); }
+    catch (e) { clearInterval(timer); finishJob();
+      $('#prog').textContent = 'ジョブが見つかりません（期限切れの可能性）'; return; }
+    const pct = Math.round((s.progress || 0) * 100);
+    $('#bar').style.width = pct + '%';
+    if (s.state === 'running')
+      $('#prog').textContent = `解析中 ${pct}%  (stroke ${(s.stroke||0).toFixed(2)}/${(s.total||0).toFixed(1)} mm, ${Math.round(s.elapsed||0)}s) ${s.note||''}`;
+    else if (s.state === 'queued') $('#prog').textContent = '待機中…';
+    if (s.state === 'done' || s.state === 'failed') {
+      clearInterval(timer);
+      finishJob();
+      render(id, s);
+    }
+  }, 1000);
+}
+function finishJob() {
+  currentJob = null;
+  localStorage.removeItem('forgeJob');
+  $('#stopbtn').hidden = true;
+  $('#runc').disabled = false;
+}
+async function stopJob() {
+  if (!currentJob) return;
+  $('#stopbtn').disabled = true;
+  $('#prog').textContent = '停止要求中…';
+  try { await fetch('api/jobs/' + currentJob + '/cancel', { method: 'POST' }); } catch (e) {}
+  setTimeout(() => { $('#stopbtn').disabled = false; }, 2000);
+}
+function render(id, s) {
+  let h = '';
+  if (s.state === 'done') {
+    const full = (s.reached_stroke ?? 0) >= (s.target_stroke ?? 0) - 1e-6;
+    $('#prog').textContent = full ? '完了' : '途中停止';
+    h += full
+      ? `<p class="ok">解析完了（全ストローク到達）</p>`
+      : `<p class="ng">⚠ 途中で停止: 全ストロークに到達できませんでした（下の診断を参照）</p>`;
+    h += `<ul>
+      <li>到達ストローク: ${s.reached_stroke?.toFixed(2)} / ${s.target_stroke?.toFixed(1)} mm`
+      + (full ? '' : ' <b>(未到達)</b>') + `</li>
+      <li>最終パンチ荷重: ${s.final_load_kN?.toFixed(1)} kN`
+      + (full ? '' : '（停止時点）') + `</li>
+      <li>ステップ数: ${s.steps}　リメッシュ: ${s.remesh}　${Math.round(s.elapsed)}s</li>`
+      + (s.used_mesh ? `<li>採用メッシュ ${s.used_mesh}mm・ステップ ${s.used_step}mm（自動試行 ${s.total_attempts}回中 ${s.attempts_tried}回目を採用）</li>` : '')
+      + `</ul>`;
+    if (s.marginal) {
+      const m = s.marginal;
+      h += `<p class="ng">⚠ 推奨メッシュ ${m.mesh}mm では ${m.reached.toFixed(2)}mm で停止しました`
+        + (m.location ? `（図中<span style="color:#f39c12">橙丸</span> r,z=(${m.location[0].toFixed(2)}, ${m.location[1].toFixed(2)})）` : '')
+        + `。完走には自動でメッシュを調整しました。この付近が設計・解析上の弱点の可能性があります。</p>`;
+    }
+  } else {
+    $('#prog').textContent = '失敗';
+    h += `<p class="ng">解析が停止しました（${s.error||''}）</p>`;
+  }
+  if (s.diagnosis) {
+    const d = s.diagnosis;
+    h += `<p class="${d.design_ng ? 'ng' : ''}">${d.design_ng ? '⚠ 設計NG: ' : '診断: '}${d.title}</p>`;
+    if (d.location) h += `<p class="muted">場所 (r,z) = (${d.location[0].toFixed(2)}, ${d.location[1].toFixed(2)}) mm</p>`;
+    if (d.suggestions?.length)
+      h += '改善案:<ul>' + d.suggestions.map(x => `<li>${x}</li>`).join('') + '</ul>';
+  }
+  const files = s.files || [];
+  if (files.includes('mesh_anim.gif'))
+    h += `<div><img src="api/jobs/${id}/files/mesh_anim.gif" alt="mesh animation"></div>`;
+  if (files.includes('results.h5'))
+    h += `<p><a href="api/jobs/${id}/files/results.h5" download>results.h5 をダウンロード</a>
+          <br><span class="muted">応力・ひずみ分布は、H5を
+          <a href="https://github.com/matsumoto-works/forgecal/releases/latest" target="_blank" rel="noopener">ポスト処理アプリ（デスクトップ版・無料）</a>
+          で表示できます（Windows用・Python不要。結果はサーバに恒久保存されません）</span></p>`;
+  $('#result').innerHTML = h;
+}
+
+// ----- material flow-curve preview (client-side) -----
+// matches the solver's SaturatingPowerLaw: power law to e_sat, then a gentle
+// linear tail at 10% of the tangent (forging saturation, not a flat plateau).
+function flowSigma(ep, K, n, eSat, e0, tailFrac) {
+  if (ep <= eSat) return K * Math.pow(e0 + ep, n);
+  const es = e0 + eSat;
+  const sSat = K * Math.pow(es, n);
+  const h = tailFrac * K * n * Math.pow(es, n - 1);
+  return sSat + h * (ep - eSat);
+}
+function drawFlowCurve() {
+  const K = parseFloat($('#C').value), n = parseFloat($('#n').value);
+  const eSat = parseFloat($('#esat').value) || 1.0, e0 = 1e-3, tailFrac = 0.1;
+  if (!(K > 0) || !(n >= 0)) { $('#flowchart').innerHTML = ''; return; }
+  const sig = ep => flowSigma(ep, K, n, eSat, e0, tailFrac);
+  const EPMAX = Math.max(3.0, eSat * 1.5), NS = 80;
+  const W = 360, H = 190, mL = 48, mR = 10, mT = 10, mB = 30;
+  const pw = W - mL - mR, ph = H - mT - mB;
+  const sigMax = sig(EPMAX) || 1;
+  const X = ep => mL + ep / EPMAX * pw;
+  const Y = s => mT + ph - (s / sigMax) * ph;
+  let d = 'M';
+  for (let i = 0; i <= NS; i++) { const ep = EPMAX * i / NS; d += `${X(ep).toFixed(1)},${Y(sig(ep)).toFixed(1)} L`; }
+  d = d.slice(0, -2);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" style="max-width:100%;border:1px solid #8884;border-radius:6px">`;
+  svg += `<line x1="${mL}" y1="${mT}" x2="${mL}" y2="${mT+ph}" stroke="#888"/>`;
+  svg += `<line x1="${mL}" y1="${mT+ph}" x2="${mL+pw}" y2="${mT+ph}" stroke="#888"/>`;
+  for (const f of [0, 0.5, 1]) { const s = sigMax * f;
+    svg += `<text x="${mL-4}" y="${(Y(s)+3).toFixed(1)}" font-size="9" text-anchor="end" fill="#888">${Math.round(s)}</text>`; }
+  const xticks = [0, 1, 2, 3].filter(e => e <= EPMAX);
+  for (const ep of xticks)
+    svg += `<text x="${X(ep).toFixed(1)}" y="${mT+ph+13}" font-size="9" text-anchor="middle" fill="#888">${ep}</text>`;
+  svg += `<text x="${mL+pw/2}" y="${H-3}" font-size="9" text-anchor="middle" fill="#888">塑性ひずみ εp</text>`;
+  svg += `<text x="11" y="${mT+ph/2}" font-size="9" text-anchor="middle" fill="#888" transform="rotate(-90 11 ${mT+ph/2})">σ [MPa]</text>`;
+  // saturation strain marker
+  if (eSat <= EPMAX) svg += `<line x1="${X(eSat).toFixed(1)}" y1="${mT}" x2="${X(eSat).toFixed(1)}" y2="${mT+ph}" stroke="#2e7d32" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="${(X(eSat)+3).toFixed(1)}" y="${mT+ph-3}" font-size="8" fill="#2e7d32">ε_sat=${eSat}</text>`;
+  svg += `<path d="${d}" fill="none" stroke="#2563eb" stroke-width="1.8"/>`;
+  // formula, top-left
+  svg += `<text x="${mL+6}" y="${mT+13}" font-size="10" fill="#2563eb">σ = K(ε₀+εp)ⁿ → ε_sat以降は飽和</text>`;
+  $('#flowchart').innerHTML = svg +
+    `<div class="muted">降伏 σ(0)=${Math.round(sig(0))} ／ σ(ε_sat)=${Math.round(sig(eSat))} ／ σ(3.0)=${Math.round(sig(3))} MPa。
+     ε_sat 以降は接線の10%のごく緩い傾き（飽和・極わずかに微増）。</div>`;
+}
+
+// ----- recommended mesh from blank size: set as the default mesh value -----
+function recommendMesh() {
+  const hint = $('#meshhint');
+  const blank = previewData && loaded.find(f => meta[f.name].role === 'blank');
+  const cs = blank && previewData[stemOf(blank)];
+  if (!cs) { hint.innerHTML = ''; return; }
+  let xs = [], ys = [];
+  for (const c of cs) for (const p of c.points) { xs.push(p[0]); ys.push(p[1]); }
+  const tmin = Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  if (!(tmin > 0)) { hint.innerHTML = ''; return; }
+  let rec = Math.min(Math.max(tmin / 14, 0.1), tmin / 4);
+  rec = Math.round(rec / 0.05) * 0.05;
+  rec = Math.round(rec * 100) / 100;
+  if (!meshTouched) $('#mesh').value = rec;          // default = recommendation
+  updateStepDefault();
+  const stroke = parseFloat($('#stroke').value) || 0;
+  const stepRec = Math.max(Math.round(Math.min(stroke / 120, rec / 8) * 1000) / 1000, 0.005);
+  hint.innerHTML = `メッシュ寸法の目安: 素材最小寸法 ${Math.round(tmin)}mm の約1/14 = ${rec} mm<br>`
+    + `解析ステップの目安: min(ストローク/120, メッシュ/8) = ${stepRec} mm`;
+}
+
+// analysis-step (d_stroke) default = min(stroke/120, mesh/8) — ~120 steps for a
+// smooth load history, capped so one step advances <=1/8 of an element (contact)
+function updateStepDefault() {
+  if (dstrokeTouched) return;
+  const mesh = parseFloat($('#mesh').value), stroke = parseFloat($('#stroke').value);
+  if (!(mesh > 0) || !(stroke > 0)) return;
+  const ds = Math.max(Math.round(Math.min(stroke / 120, mesh / 8) * 1000) / 1000, 0.005);
+  $('#dstroke').value = ds;
+}
+
+async function refreshQueue() {
+  try {
+    const q = await (await fetch('api/queue')).json();
+    const n = q.max_queue || 5;
+    const used = Math.min((q.waiting || 0) + (q.running ? 1 : 0), n);
+    let sq = '';
+    for (let i = 0; i < n; i++)
+      sq += `<span class="qsq" style="background:${i < used ? '#c0392b' : '#2e7d32'}"></span>`;
+    const lab = q.running ? (q.waiting ? `実行中・待ち${q.waiting}件` : '実行中') : '空き';
+    $('#qinfo').innerHTML = `ジョブ状況 ${sq} <span class="muted">${lab}</span>`;
+  } catch (e) { $('#qinfo').innerHTML = ''; }
+}
+
+$('#runc').addEventListener('click', runCustom);
+renderModels();
+drawFlowCurve();
+updateStepDefault();
+refreshQueue();
+setInterval(refreshQueue, 3000);
+// reconnect to a job still running from before a reload / browser close
+const _saved = localStorage.getItem('forgeJob');
+if (_saved) poll(_saved);
+</script>
+</body>
+</html>

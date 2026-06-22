@@ -1,0 +1,21 @@
+# ── build / packaging artifacts (regenerable) ───────────────────────────────
+build/
+dist/
+*.spec
+*.log
+*.zip
+# release_assets: keep the READMEs tracked, exclude large binaries (on GitHub Releases)
+release_assets/*.zip
+release_assets/*.h5
+
+# ── Python caches ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── large data (regenerable test output / external reference) ────────────────
+results/
+deform_result/
+
+# keep small inputs/docs tracked: model/, model_cases/, material/, web/, deploy/,
+# release_assets/ (README + sample h5) stay in git.

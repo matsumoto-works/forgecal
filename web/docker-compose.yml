@@ -1,0 +1,42 @@
+# forge-calc — isolated co-tenant on the ChirpStack VPS.
+#   cd /opt/plasticfem && docker compose up -d --build
+#
+# Zero-interference design (sized from a measured 230 MB solver peak):
+#   * mem_limit 768m   -> hard cgroup cap. If the container ever exceeds it the
+#                         OOM killer acts INSIDE this cgroup only; ChirpStack /
+#                         Postgres (their own cgroups) are never touched.
+#   * MEM_SOFT_MB 600  -> the worker kills a runaway *solve* subprocess first,
+#                         so the API stays up and returns a clean message before
+#                         the hard cap is ever reached.
+#   * cpus 1.5 of 3    -> always leaves >=1 core for the IoT workload.
+#   * 127.0.0.1:8000   -> bound to localhost; only nginx reaches it.
+#   * its own compose project + network -> no overlap with chirpstack-docker.
+name: forge-calc
+services:
+  forge-calc:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    image: forge-calc:latest
+    container_name: forge-calc
+    restart: unless-stopped
+    mem_limit: 768m
+    memswap_limit: 768m        # no extra swap for the container -> predictable
+    cpus: 1.5
+    environment:
+      MEM_SOFT_MB: "600"
+      JOB_TIMEOUT: "1800"        # allow fine-mesh runs to finish (cpus cap still
+                                #  bounds CPU; worker is serial so 1 job at a time)
+      OMP_NUM_THREADS: "2"      # BLAS up to 2 threads -- the cpus:1.5 cgroup cap
+      OPENBLAS_NUM_THREADS: "2" #  is the real CPU limit, so this never starves IoT
+      MKL_NUM_THREADS: "2"
+      MAX_JOBS: "20"            # transient results: keep recent jobs only
+      JOB_TTL_SEC: "86400"      # and drop anything older than 24h
+      JOBS_DIR: "/data/jobs"
+    volumes:
+      - forge_jobs:/data/jobs
+    ports:
+      - "127.0.0.1:8000:8000"   # localhost only; nginx proxies in
+
+volumes:
+  forge_jobs:

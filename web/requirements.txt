@@ -1,0 +1,14 @@
+# forge-calc web service
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+python-multipart==0.0.*
+pydantic==2.*
+psutil==5.9.*
+# solver deps (plasticfem)
+numpy==1.26.*
+scipy==1.13.*
+gmsh==4.13.*
+ezdxf==1.3.*
+h5py==3.11.*
+matplotlib==3.9.*
+imageio==2.*
