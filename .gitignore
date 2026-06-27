@@ -1,0 +1,29 @@
+# ── build / packaging artifacts (regenerable) ───────────────────────────────
+build/
+dist/
+*.spec
+*.log
+*.zip
+# release_assets: keep the READMEs tracked, exclude large binaries (on GitHub Releases)
+release_assets/*.zip
+release_assets/*.h5
+
+# ── Python caches ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── large data (regenerable test output / external reference) ────────────────
+results/
+deform_result/
+
+# ── proprietary solver code (NOT for public repo) ───────────────────────────
+plasticfem/
+run_case.py
+web/app.py
+web/solve_job.py
+SOLVER_DIAGNOSTICS.md
+debug_*.py
+
+# keep small inputs/docs tracked: model/, model_cases/, material/, web/static/,
+# release_assets/ (README + sample h5) stay in git.
