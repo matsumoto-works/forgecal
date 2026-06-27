@@ -21,9 +21,16 @@ REM   vtk/vtkmodules: 306 MB, botocore(AWS): 97 MB, panel/bokeh: 131 MB,
 REM   llvmlite/numba: 70 MB  -> total ~604 MB saved
 REM   gmsh (85 MB) is intentionally INCLUDED: tool stress uses mesher.mesh_polygon
 REM   and the scipy fallback gives +50~60% error on die/punch vs GMSH.
+REM Run this script from the PlasticFEM_v4 root with the conda base env active:
+REM   conda activate base
+REM   cd /d path\to\PlasticFEM_v4
+REM   build_post_exe.bat
+REM
+REM %CONDA_PREFIX% is set automatically by conda activate.
+REM If python is not found, run: conda activate base
 REM ============================================================================
-set PY="C:\Users\gimme\anaconda3\python.exe"
-set BIN=C:\Users\gimme\anaconda3\Library\bin
+set PY=python
+set BIN=%CONDA_PREFIX%\Library\bin
 
 %PY% -m PyInstaller --noconfirm --clean --onedir --name ForgeCalPost ^
   --collect-all streamlit ^
